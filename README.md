@@ -108,7 +108,12 @@ wins:
    ```toml
    [rgb]
    primary = "#d7827e"
+   secondary = "#56949f"
+   accent = "#ebbcba"
    ```
+
+   All three keys are optional. `accent` overrides the theme's UI accent
+   for lighting only — useful when the UI accent renders poorly on LEDs.
 
    Unknown tables are ignored by every other Omarchy component, so this is
    safe to add to any theme.
@@ -127,8 +132,9 @@ affects the active theme.
 With several managed devices, each can follow a different slot of the theme
 while follow-theme is on: **primary** (the default — the resolved colour
 above), **secondary** (the `secondary` key in your themes.toml or a theme's
-`[rgb]` table, falling back to primary), or **accent** (the raw theme
-accent). A manually picked colour still applies to every device alike.
+`[rgb]` table, falling back to primary), or **accent** (an `accent` key
+resolved the same way, falling back to the theme's UI accent). A manually
+picked colour still applies to every device alike.
 
 Assign roles from the popout — managed device rows grow a role chip while
 follow-theme is on; click it to cycle — or from the CLI (devices matched
