@@ -311,7 +311,7 @@ def cmd_setup(with_theme_hook):
         print("• openrgb-python: present")
 
     unit = f"""[Unit]
-Description=OpenRGB SDK server (omarchy-case-rgb)
+Description=OpenRGB SDK server (omarchy-openrgb)
 
 [Service]
 ExecStart=/usr/bin/openrgb --server --server-host 127.0.0.1
@@ -357,7 +357,7 @@ WantedBy=default.target
 
 def main():
     parser = argparse.ArgumentParser(prog="omarchy-rgb",
-                                     description="Case RGB control via OpenRGB")
+                                     description="RGB Lighting control via OpenRGB")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
     sub.add_parser("rescan",
