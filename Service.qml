@@ -32,10 +32,13 @@ Item {
   property bool needsSetup: false
 
   // Whether the theme-set hook is installed — without it the follow-theme
-  // toggle can't actually track anything, so the panel greys it out.
-  // Re-checked every time the popout opens, so installing the hook is
-  // picked up without a shell restart.
+  // toggle can't actually track anything, so the panel greys it out. Stale
+  // means installed but older than the copy this plugin version ships, so
+  // the panel can suggest a refresh. Re-checked every time the popout
+  // opens, so installing or upgrading the hook is picked up without a
+  // shell restart.
   property bool themeHookInstalled: true
+  property bool themeHookStale: false
   function checkThemeHook() {
     if (!hookProc.running) hookProc.running = true
   }
@@ -137,8 +140,16 @@ Item {
 
   Process {
     id: hookProc
-    command: ["test", "-x", root.home + "/.config/omarchy/hooks/theme-set.d/20-case-rgb"]
-    onExited: function(exitCode) { root.themeHookInstalled = exitCode === 0 }
+    // Exit 1: hook missing. Exit 2: installed but differs from the plugin's
+    // shipped copy (an update changed it, or it's a hand-edited relic).
+    command: ["sh", "-c",
+      'dst="$HOME/.config/omarchy/hooks/theme-set.d/20-case-rgb"; ' +
+      'test -x "$dst" || exit 1; cmp -s "$dst" "$1" || exit 2',
+      "sh", root.pluginDir + "hooks/20-case-rgb"]
+    onExited: function(exitCode) {
+      root.themeHookInstalled = exitCode !== 1
+      root.themeHookStale = exitCode === 2
+    }
   }
 
   Process {

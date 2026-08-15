@@ -342,11 +342,14 @@ WantedBy=default.target
         else:
             print(f"• {BIN_LINK} exists and is not a symlink — left untouched")
 
-    if with_theme_hook:
+    # --with-theme-hook opts in the first time; once a hook is installed, a
+    # plain `setup` keeps it refreshed when the plugin ships a newer copy
+    # (the popout shows a banner suggesting exactly that).
+    hook_dst = os.path.join(HOOK_DIR, "20-case-rgb")
+    if with_theme_hook or os.path.exists(hook_dst):
         os.makedirs(HOOK_DIR, exist_ok=True)
         hook_src = os.path.join(os.path.dirname(os.path.dirname(SCRIPT_PATH)),
                                 "hooks", "20-case-rgb")
-        hook_dst = os.path.join(HOOK_DIR, "20-case-rgb")
         shutil.copyfile(hook_src, hook_dst)
         os.chmod(hook_dst, 0o755)
         print(f"• theme hook installed: {hook_dst}")

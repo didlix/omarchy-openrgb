@@ -178,6 +178,16 @@ Panel {
         onClicked: rgb.setFollowTheme(!rgb.followTheme)
       }
 
+      Text {
+        visible: rgb.themeHookStale
+        width: parent.width
+        text: "Theme hook update available — re-run `omarchy-rgb setup`."
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        wrapMode: Text.WordWrap
+      }
+
       Item {
         width: parent.width
         implicitHeight: devicesHeader.implicitHeight
