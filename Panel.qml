@@ -335,6 +335,7 @@ Panel {
           Column {
             id: roleRow
             required property var modelData
+            readonly property bool multiZone: (modelData.zones instanceof Array) && modelData.zones.length > 1
             visible: modelData.managed === true
             width: parent.width
             spacing: Style.space(6)
@@ -359,6 +360,42 @@ Panel {
               focusable: false
               onChanged: function(value) {
                 rgb.setDeviceRole(String(roleRow.modelData.name || ""), value)
+              }
+            }
+
+            // Zones inherit the device role until given their own; shown
+            // indented, only when the device actually has several zones.
+            Repeater {
+              model: roleRow.multiZone ? roleRow.modelData.zones : []
+              Column {
+                id: zoneRow
+                required property var modelData
+                width: parent.width
+                spacing: Style.space(4)
+
+                Text {
+                  width: parent.width
+                  leftPadding: Style.space(14)
+                  text: String(zoneRow.modelData.name || "")
+                  elide: Text.ElideRight
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                ButtonGroup {
+                  x: Style.space(14)
+                  options: ["primary", "secondary", "accent"]
+                  value: String(zoneRow.modelData.role || roleRow.modelData.role || "primary")
+                  foreground: root.foreground
+                  accent: Color.accent
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  focusable: false
+                  onChanged: function(value) {
+                    rgb.setDeviceRole(String(roleRow.modelData.name || "") + "/" + String(zoneRow.modelData.name || ""), value)
+                  }
+                }
               }
             }
           }
