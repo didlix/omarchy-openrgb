@@ -73,8 +73,11 @@ DEFAULT_STATE = {
                 "#00E5FF", "#0066FF", "#9933FF", "#FF3399"],
     "devices": [],
     "devices_none": False,
+    "device_roles": {},
     "persist_commands": [],
 }
+
+ROLES = ("primary", "secondary", "accent")
 
 
 def load_state():
@@ -225,17 +228,34 @@ def apply_state(state, from_unit=False, save=True):
 
         from openrgb.utils import RGBColor
 
-        r, g, b = parse_hex(state["color"])
         scale = max(0, min(100, state["brightness"])) / 100
-        colour = RGBColor(round(r * scale), round(g * scale), round(b * scale))
+
+        def scaled(rgb):
+            return RGBColor(*(round(c * scale) for c in rgb))
+
+        colour = scaled(parse_hex(state["color"]))
         black = RGBColor(0, 0, 0)
+
+        # With follow-theme on, each device lights its assigned role's colour
+        # (primary — i.e. state["color"] — by default); a manual colour
+        # applies to every device alike.
+        role_colours = {}
+
+        def colour_for(dev):
+            if not state["follow_theme"] or not state.get("device_roles"):
+                return colour
+            role = role_of(dev.name, state)
+            if role not in role_colours:
+                rgb = theme_role_color(role)
+                role_colours[role] = colour if rgb is None else scaled(rgb)
+            return role_colours[role]
 
         # Per-device failures (a sleeping wireless mouse, say) must not stop
         # the rest; succeed if anything applied.
         applied = 0
         for dev in devices:
             try:
-                apply_to_device(dev, state, colour, black)
+                apply_to_device(dev, state, colour_for(dev), black)
                 applied += 1
                 if save:
                     # Persist to the device's onboard memory where supported, so
@@ -314,16 +334,38 @@ def theme_name():
         return None
 
 
-def rgb_of(value):
-    """A colour entry as an RGB tuple: '#RRGGBB' or {primary = '#RRGGBB'}."""
+def rgb_of(value, key="primary"):
+    """A colour entry as an RGB tuple: '#RRGGBB' or a table like
+    {primary = '#RRGGBB', secondary = '#RRGGBB'}. A bare string only ever
+    names the primary."""
     if isinstance(value, dict):
-        value = value.get("primary")
+        value = value.get(key)
+    elif key != "primary":
+        return None
     if not isinstance(value, str):
         return None
     try:
         return parse_hex(value)
     except SystemExit:
         return None
+
+
+def resolve_theme_key(key):
+    """First match through the layers: the user's themes.toml override, the
+    theme's own [rgb] table, then the curated defaults."""
+    name = theme_name()
+    if name:
+        rgb = rgb_of(toml_load(OVERRIDES_FILE).get(name), key)
+        if rgb is not None:
+            return rgb
+    rgb = rgb_of(toml_load(THEME_COLORS_FILE).get("rgb"), key)
+    if rgb is not None:
+        return rgb
+    if name:
+        rgb = rgb_of(CURATED.get(name), key)
+        if rgb is not None:
+            return rgb
+    return None
 
 
 def theme_rgb_color():
@@ -333,19 +375,30 @@ def theme_rgb_color():
     table, the curated defaults, then the theme accent. Every layer is
     optional, so a theme with none of them still follows its accent.
     """
-    name = theme_name()
-    if name:
-        rgb = rgb_of(toml_load(OVERRIDES_FILE).get(name))
+    rgb = resolve_theme_key("primary")
+    return rgb if rgb is not None else theme_accent()
+
+
+def theme_role_color(role):
+    """Colour for a device role. accent is always the raw theme accent;
+    secondary resolves its own key through the layers and falls back to the
+    primary chain; everything else is the primary chain."""
+    if role == "accent":
+        return theme_accent()
+    if role == "secondary":
+        rgb = resolve_theme_key("secondary")
         if rgb is not None:
             return rgb
-    rgb = rgb_of(toml_load(THEME_COLORS_FILE).get("rgb"))
-    if rgb is not None:
-        return rgb
-    if name:
-        rgb = rgb_of(CURATED.get(name))
-        if rgb is not None:
-            return rgb
-    return theme_accent()
+    return theme_rgb_color()
+
+
+def role_of(name, state):
+    """Role for a device, matched like set-device: case-insensitive
+    substring, primary when nothing matches."""
+    for key, role in (state.get("device_roles") or {}).items():
+        if str(key).lower() in name.lower():
+            return role if role in ROLES else "primary"
+    return "primary"
 
 
 def save_overrides(overrides):
@@ -477,6 +530,9 @@ def main():
                             "'<theme> #RRGGBB' another's; --unset removes")
     p.add_argument("words", nargs="*", metavar="[theme] [hex]")
     p.add_argument("--unset", action="store_true")
+    p.add_argument("--secondary", action="store_true",
+                   help="set (or unset) the secondary role's colour instead "
+                        "of the primary")
     p = sub.add_parser("follow-theme")
     p.add_argument("mode", choices=["on", "off", "toggle"])
     p = sub.add_parser("set-device",
@@ -485,6 +541,13 @@ def main():
                             "--none manages no devices at all")
     p.add_argument("names", nargs="*")
     p.add_argument("--none", action="store_true", dest="none_selected")
+    p = sub.add_parser("device-role",
+                       help="per-device colour role while follow-theme is on: "
+                            "no args lists assignments, '<device> "
+                            "primary|secondary|accent' sets one (device "
+                            "matched like set-device, by case-insensitive "
+                            "substring; primary is the default)")
+    p.add_argument("words", nargs="*", metavar="[device] [role]")
     p = sub.add_parser("setup")
     p.add_argument("--with-theme-hook", action="store_true",
                    help="also install the follow-theme hook")
@@ -530,7 +593,8 @@ def main():
                         for dev in client.devices:
                             result.append({"name": dev.name,
                                            "type": dev.type.name.replace("_", " ").title(),
-                                           "managed": dev.name in managed})
+                                           "managed": dev.name in managed,
+                                           "role": role_of(dev.name, state)})
                     finally:
                         client.disconnect()
             print(json.dumps(result))
@@ -541,9 +605,13 @@ def main():
             current = theme_name()
             if not args.words and not args.unset:
                 for theme in sorted(overrides):
-                    rgb = rgb_of(overrides[theme])
-                    print(f"{theme}: " + ("#{:02X}{:02X}{:02X}".format(*rgb)
-                                          if rgb else "(invalid)"))
+                    parts = []
+                    for key in ("primary", "secondary"):
+                        rgb = rgb_of(overrides[theme], key)
+                        if rgb is not None:
+                            label = "" if key == "primary" else key + " "
+                            parts.append(label + "#{:02X}{:02X}{:02X}".format(*rgb))
+                    print(f"{theme}: " + ("  ".join(parts) or "(nothing valid)"))
                 resolved = theme_rgb_color()
                 if current:
                     print(f"{current} (current) resolves to " +
@@ -560,14 +628,22 @@ def main():
             theme = theme or current
             if theme is None:
                 raise SystemExit("omarchy-rgb: no current theme and none given")
+            key = "secondary" if args.secondary else "primary"
             if args.unset:
-                overrides.pop(theme, None)
+                if args.secondary:
+                    entry = overrides.get(theme)
+                    if isinstance(entry, dict):
+                        entry.pop("secondary", None)
+                        if not entry:
+                            overrides.pop(theme, None)
+                else:
+                    overrides.pop(theme, None)
             elif hex_arg is None:
                 raise SystemExit("omarchy-rgb: expected a #RRGGBB colour")
             else:
                 entry = overrides.get(theme)
                 entry = dict(entry) if isinstance(entry, dict) else {}
-                entry["primary"] = "#{:02X}{:02X}{:02X}".format(*parse_hex(hex_arg))
+                entry[key] = "#{:02X}{:02X}{:02X}".format(*parse_hex(hex_arg))
                 overrides[theme] = entry
             save_overrides(overrides)
             # Relight immediately when the change affects the active theme.
@@ -580,6 +656,29 @@ def main():
                     sys.exit(1)
             else:
                 save_state(state)
+            return
+
+        if args.cmd == "device-role":
+            roles = dict(state.get("device_roles") or {})
+            if not args.words:
+                for device in sorted(roles):
+                    print(f"{device}: {roles[device]}")
+                save_state(state)
+                return
+            if len(args.words) != 2 or args.words[1] not in ROLES:
+                raise SystemExit(
+                    "omarchy-rgb: expected '<device> primary|secondary|accent'")
+            device, role = args.words
+            if role == "primary":
+                roles.pop(device, None)  # primary is the default
+            else:
+                roles[device] = role
+            state["device_roles"] = roles
+            save_state(state)
+            # Relight so the new role shows immediately (a no-op difference
+            # unless follow-theme is on).
+            if not apply_state(state):
+                sys.exit(1)
             return
 
         if args.cmd == "on":

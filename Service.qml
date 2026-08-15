@@ -138,6 +138,19 @@ Item {
     run(names.length > 0 ? ["set-device"].concat(names) : ["set-device", "--none"])
   }
 
+  // Assign a device's follow-theme colour role (primary/secondary/accent).
+  // Optimistic like everything else; the CLI relights if follow-theme is on.
+  function setDeviceRole(name, role) {
+    var model = devicesModel.slice()
+    for (var i = 0; i < model.length; i++) {
+      var dev = Object.assign({}, model[i])
+      if (dev.name === name) dev.role = role
+      model[i] = dev
+    }
+    root.devicesModel = model
+    run(["device-role", name, role])
+  }
+
   Process {
     id: hookProc
     // Exit 1: hook missing. Exit 2: installed but differs from the plugin's
