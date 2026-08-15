@@ -3,7 +3,7 @@ import QtQuick.Controls
 import qs.Commons
 import qs.Ui
 
-// Case RGB bar widget: icon tinted with the current colour, popout with
+// RGB Lighting bar widget: icon tinted with the current colour, popout with
 // on/off, preset swatches, hue + brightness sliders, and follow-theme.
 // Default manageIpc gives `omarchy-shell didlix.case-rgb open/close/toggle`.
 Panel {

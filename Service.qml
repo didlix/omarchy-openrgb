@@ -2,7 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 
-// State and actions for case RGB. The single source of truth is
+// State and actions for RGB lighting. The single source of truth is
 // ~/.local/state/omarchy-rgb/state.json, written by the bundled omarchy-rgb
 // CLI and watched here, so keybindings, menu entries and this widget stay
 // consistent. Actions are optimistic (properties update immediately) and

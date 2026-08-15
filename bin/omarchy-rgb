@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""omarchy-rgb — case RGB control for Omarchy via the OpenRGB SDK server.
+"""omarchy-rgb — RGB lighting control for Omarchy via the OpenRGB SDK server.
 
 Ships with the didlix.case-rgb shell plugin. The state file is the
 single source of truth: every command updates it first, then pushes it to the

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Follow the Omarchy theme on case RGB. Installed by
+# Follow the Omarchy theme on RGB lighting. Installed by
 # `omarchy-rgb setup --with-theme-hook`. All colour resolution lives in the
 # CLI (user override > theme [rgb] table > curated > accent), and set-theme
 # is a no-op while follow_theme is off, so a manually picked colour survives
