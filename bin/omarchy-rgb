@@ -72,8 +72,12 @@ def load_state():
         state = {}
     if state.get("device") and not state.get("devices"):  # pre-1.1 state files
         state["devices"] = [state["device"]]
+    state.pop("device", None)
     merged = dict(DEFAULT_STATE)
-    merged.update({k: v for k, v in state.items() if k in DEFAULT_STATE})
+    # Unknown keys are kept, not filtered: state written by a newer plugin
+    # version must survive a round-trip through older code, or a downgrade's
+    # first write silently destroys newer settings.
+    merged.update(state)
     return merged
 
 
