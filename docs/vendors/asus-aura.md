@@ -25,3 +25,13 @@ it appears (and toggles) as one entry, and every zone gets the same colour.
 Across boots, OpenRGB may enumerate devices in a different order (a mouse
 can become device 0). Never rely on device indices — the plugin matches by
 name for exactly this reason.
+
+## Case chains and voltage sag
+
+A daisy-chain of case LEDs (fan ring + PSU LED on one addressable header)
+can misrender at high combined drive even though the header itself is rated
+5V/3A: the thin inter-device wiring sags under load. Observed on a Z790-I
+chain — pure colours fine, ~50% white fine, full pastel goes dark, full
+white turns purple (green browns out first). If pale colours look dark or
+white shifts colour, cap overall brightness around 50–60% — the LEDs, not
+the plugin, are the limit.
