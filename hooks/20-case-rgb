@@ -1,0 +1,22 @@
+#!/bin/bash
+# Follow the Omarchy theme accent on case RGB. Installed by
+# `omarchy-rgb setup --with-theme-hook`. Routed through omarchy-rgb so a
+# manually picked colour survives theme changes (set-theme is a no-op while
+# follow_theme is false).
+
+colors="$HOME/.local/state/omarchy/current/theme/colors.toml"
+[ -r "$colors" ] || exit 0
+
+while IFS= read -r line; do
+  case "$line" in
+    "accent = "*)
+      accent="${line#*= }"
+      accent="${accent//\"/}"
+      accent="${accent#\#}"
+      break
+      ;;
+  esac
+done < "$colors"
+
+[ -n "$accent" ] || exit 0
+exec "$HOME/.local/bin/omarchy-rgb" set-theme "#$accent"

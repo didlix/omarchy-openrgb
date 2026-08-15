@@ -1,0 +1,491 @@
+#!/usr/bin/env python3
+"""omarchy-rgb — case RGB control for Omarchy via the OpenRGB SDK server.
+
+Ships with the didlix.case-rgb shell plugin. The state file is the
+single source of truth: every command updates it first, then pushes it to the
+hardware through the SDK server. Keybindings, menu entries and the bar widget
+all act through this CLI, so they can never disagree.
+
+Run `omarchy-rgb setup` once after installing the plugin — it installs the
+openrgb package (with your consent), a private venv for openrgb-python
+(GPL-3.0, installed from PyPI at setup time, not distributed with this
+plugin), and a systemd user unit that restores your lighting on every boot.
+"""
+
+import argparse
+import colorsys
+import fcntl
+import glob
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+SCRIPT_PATH = os.path.realpath(__file__)
+STATE_DIR = os.path.expanduser("~/.local/state/omarchy-rgb")
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+LOCK_FILE = os.path.join(STATE_DIR, "lock")
+DATA_DIR = os.path.expanduser("~/.local/share/omarchy-case-rgb")
+VENV_DIR = os.path.join(DATA_DIR, "venv")
+SERVER_UNIT = "openrgb-server.service"
+UNIT_PATH = os.path.expanduser("~/.config/systemd/user/" + SERVER_UNIT)
+BIN_LINK = os.path.expanduser("~/.local/bin/omarchy-rgb")
+HOOK_DIR = os.path.expanduser("~/.config/omarchy/hooks/theme-set.d")
+
+# openrgb-python lives in the setup-managed venv; the CLI itself runs on the
+# system interpreter so `setup` works before any dependencies exist.
+for _site in glob.glob(os.path.join(VENV_DIR, "lib", "python*", "site-packages")):
+    if _site not in sys.path:
+        sys.path.insert(0, _site)
+
+DEFAULT_STATE = {
+    "on": True,
+    "color": "#FF6600",
+    "hue": 24,
+    "brightness": 100,
+    "follow_theme": True,
+    "preset_index": 0,
+    "presets": ["#FF0000", "#FF4000", "#FFD000", "#00FF66",
+                "#00E5FF", "#0066FF", "#9933FF", "#FF3399"],
+    "devices": [],
+    "devices_none": False,
+    "persist_commands": [],
+}
+
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        state = {}
+    if state.get("device") and not state.get("devices"):  # pre-1.1 state files
+        state["devices"] = [state["device"]]
+    merged = dict(DEFAULT_STATE)
+    merged.update({k: v for k, v in state.items() if k in DEFAULT_STATE})
+    return merged
+
+
+def save_state(state):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, STATE_FILE)  # atomic rename; triggers FileView reliably
+
+
+def parse_hex(value):
+    value = value.lstrip("#")
+    if len(value) != 6:
+        raise SystemExit(f"omarchy-rgb: expected RRGGBB hex colour, got {value!r}")
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def hue_of(rgb):
+    h, _, _ = colorsys.rgb_to_hsv(*(c / 255 for c in rgb))
+    return round(h * 360) % 360
+
+
+def openrgb_available():
+    try:
+        import openrgb  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def connect(autostart=True, retries=8):
+    """Connect to the SDK server, starting the user unit if it is down.
+
+    autostart must be False on the path the unit itself runs (ExecStartPost's
+    `restore`) — a blocking systemctl start from inside the unit's own start
+    job deadlocks until the job times out.
+    """
+    from openrgb import OpenRGBClient
+
+    for attempt in range(retries):
+        try:
+            return OpenRGBClient()
+        except (ConnectionRefusedError, ConnectionError, TimeoutError, OSError):
+            if attempt == 0 and autostart:
+                subprocess.run(
+                    ["systemctl", "--user", "start", "--no-block", SERVER_UNIT],
+                    check=False, capture_output=True)
+            time.sleep(0.5)
+    return None
+
+
+def find_devices(client, state):
+    from openrgb.utils import DeviceType
+
+    if state.get("devices_none"):  # user disabled every device
+        return []
+    wanted = [str(w).strip().lower() for w in state.get("devices") or [] if str(w).strip()]
+    if wanted:
+        found = []
+        for want in wanted:
+            for dev in client.devices:
+                if want in dev.name.lower() and dev not in found:
+                    found.append(dev)
+        return found
+    for dev in client.devices:  # sensible default: the motherboard controller
+        if dev.type == DeviceType.MOTHERBOARD:
+            return [dev]
+    return client.devices[:1]
+
+
+def find_mode(dev, name):
+    for mode in dev.modes:
+        if mode.name.lower() == name.lower():
+            return mode
+    return None
+
+
+def apply_to_device(dev, state, colour, black):
+    """Push state to one device, working with whatever modes it has.
+
+    Static persists on-controller; Direct only holds while the SDK server has
+    the device open — fine, the server is a permanently-running user service.
+    Devices without a native Off (e.g. SteelSeries mice) go black instead.
+    """
+    if not state["on"]:
+        off = find_mode(dev, "Off")
+        if off is not None:
+            dev.set_mode(off)
+            return
+        dev.set_mode(find_mode(dev, "Static") or find_mode(dev, "Direct") or dev.modes[0])
+        dev.set_color(black)
+        return
+
+    mode = find_mode(dev, "Static") or find_mode(dev, "Direct")
+    if mode is not None:
+        dev.set_mode(mode)
+    dev.set_color(colour)  # whole device: every zone alike
+
+
+def apply_state(state, from_unit=False, save=True):
+    """Push the current state to the hardware. Returns True on success."""
+    if state.get("devices_none"):
+        return True  # nothing managed, nothing to do
+    if not openrgb_available():
+        print("omarchy-rgb: openrgb-python not installed — run `omarchy-rgb setup`",
+              file=sys.stderr)
+        return False
+    client = connect(autostart=not from_unit, retries=30 if from_unit else 8)
+    if client is None:
+        print("omarchy-rgb: OpenRGB SDK server unreachable — run `omarchy-rgb setup`",
+              file=sys.stderr)
+        return False
+    try:
+        # The server accepts SDK connections before device detection finishes;
+        # freshly started it briefly reports zero devices. Reconnect until they
+        # appear rather than failing.
+        deadline = time.monotonic() + (20 if from_unit else 5)
+        devices = find_devices(client, state)
+        while not devices and time.monotonic() < deadline:
+            client.disconnect()
+            time.sleep(0.5)
+            client = connect(autostart=False, retries=4)
+            if client is None:
+                print("omarchy-rgb: OpenRGB SDK server unreachable", file=sys.stderr)
+                return False
+            devices = find_devices(client, state)
+        if not devices:
+            print("omarchy-rgb: no OpenRGB devices found", file=sys.stderr)
+            return False
+
+        from openrgb.utils import RGBColor
+
+        r, g, b = parse_hex(state["color"])
+        scale = max(0, min(100, state["brightness"])) / 100
+        colour = RGBColor(round(r * scale), round(g * scale), round(b * scale))
+        black = RGBColor(0, 0, 0)
+
+        # Per-device failures (a sleeping wireless mouse, say) must not stop
+        # the rest; succeed if anything applied.
+        applied = 0
+        for dev in devices:
+            try:
+                apply_to_device(dev, state, colour, black)
+                applied += 1
+                if save:
+                    # Persist to the device's onboard memory where supported, so
+                    # wireless mice that micro-sleep wake up in the right colour
+                    # instead of their firmware default. Slider drags skip this
+                    # to spare the flash.
+                    try:
+                        dev.save_mode()
+                    except Exception:  # noqa: BLE001 — many controllers can't save
+                        pass
+            except Exception as exc:  # noqa: BLE001 — device quirks vary widely
+                print(f"omarchy-rgb: {dev.name}: {exc}", file=sys.stderr)
+
+        # Some hardware only persists colour through its own vendor tool
+        # (e.g. SteelSeries mice via rivalcfg — their firmware ignores
+        # OpenRGB's SaveMode). persist_commands in state.json is a list of
+        # argv templates run on save-worthy actions; {color} becomes the
+        # brightness-scaled hex (#000000 when off).
+        if save and applied:
+            final = "#000000" if not state["on"] else \
+                "#{:02X}{:02X}{:02X}".format(colour.red, colour.green, colour.blue)
+            for template in state.get("persist_commands") or []:
+                cmd = [str(part).replace("{color}", final) for part in template]
+                result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"omarchy-rgb: persist command failed: {' '.join(cmd)}: "
+                          f"{result.stderr.strip()}", file=sys.stderr)
+        return applied > 0
+    finally:
+        client.disconnect()
+
+
+def server_reachable():
+    if not openrgb_available():
+        return False
+    client = connect(autostart=False, retries=2)
+    if client is None:
+        return False
+    client.disconnect()
+    return True
+
+
+def set_colour(state, rgb, follow_theme=False):
+    state["color"] = "#{:02X}{:02X}{:02X}".format(*rgb)
+    state["hue"] = hue_of(rgb)
+    state["follow_theme"] = follow_theme
+
+
+def theme_accent():
+    """Current Omarchy theme accent as an RGB tuple, or None."""
+    path = os.path.expanduser("~/.local/state/omarchy/current/theme/colors.toml")
+    try:
+        with open(path) as f:
+            for line in f:
+                if line.startswith("accent"):
+                    value = line.split("=", 1)[1].strip().strip('"').lstrip("#")
+                    return parse_hex(value)
+    except (OSError, SystemExit):
+        pass
+    return None
+
+
+def confirm(prompt):
+    if not sys.stdin.isatty():
+        return False
+    return input(f"{prompt} [Y/n] ").strip().lower() in ("", "y", "yes")
+
+
+def cmd_setup(with_theme_hook):
+    print("omarchy-rgb setup")
+
+    if shutil.which("openrgb") is None:
+        print("• The openrgb package is not installed.")
+        if confirm("  Install it now with `omarchy pkg add openrgb`?"):
+            subprocess.run(["omarchy", "pkg", "add", "openrgb"], check=True)
+        else:
+            print("  Skipped. Install openrgb before using the plugin.")
+    else:
+        print("• openrgb package: present")
+
+    if not openrgb_available():
+        print("• Installing openrgb-python into a private venv "
+              f"({VENV_DIR}) …")
+        os.makedirs(DATA_DIR, exist_ok=True)
+        subprocess.run([sys.executable, "-m", "venv", VENV_DIR], check=True)
+        subprocess.run([os.path.join(VENV_DIR, "bin", "pip"), "install",
+                        "--quiet", "openrgb-python"], check=True)
+        print("  Done.")
+    else:
+        print("• openrgb-python: present")
+
+    unit = f"""[Unit]
+Description=OpenRGB SDK server (omarchy-case-rgb)
+
+[Service]
+ExecStart=/usr/bin/openrgb --server --server-host 127.0.0.1
+ExecStartPost=-{SCRIPT_PATH} restore
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+"""
+    os.makedirs(os.path.dirname(UNIT_PATH), exist_ok=True)
+    rewrite = not os.path.exists(UNIT_PATH) or open(UNIT_PATH).read() != unit
+    if rewrite:
+        with open(UNIT_PATH, "w") as f:
+            f.write(unit)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", "--now", SERVER_UNIT],
+                   check=True)
+    print(f"• systemd user unit: {SERVER_UNIT} enabled and started")
+
+    bin_dir = os.path.dirname(BIN_LINK)
+    if os.path.isdir(bin_dir):
+        if os.path.islink(BIN_LINK) or not os.path.exists(BIN_LINK):
+            tmp_link = BIN_LINK + ".tmp"
+            os.symlink(SCRIPT_PATH, tmp_link)
+            os.replace(tmp_link, BIN_LINK)
+            print(f"• {BIN_LINK} → this script (for keybindings/menu entries)")
+        else:
+            print(f"• {BIN_LINK} exists and is not a symlink — left untouched")
+
+    if with_theme_hook:
+        os.makedirs(HOOK_DIR, exist_ok=True)
+        hook_src = os.path.join(os.path.dirname(os.path.dirname(SCRIPT_PATH)),
+                                "hooks", "20-case-rgb")
+        hook_dst = os.path.join(HOOK_DIR, "20-case-rgb")
+        shutil.copyfile(hook_src, hook_dst)
+        os.chmod(hook_dst, 0o755)
+        print(f"• theme hook installed: {hook_dst}")
+
+    print("\nAll set. Try: omarchy-rgb status | jq .")
+    print("Keybinding and menu snippets are in the plugin README.")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="omarchy-rgb",
+                                     description="Case RGB control via OpenRGB")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("status")
+    sub.add_parser("rescan",
+                   help="restart the OpenRGB server so hot-plugged devices are detected")
+    sub.add_parser("list-devices",
+                   help="JSON list of every OpenRGB device and whether it is managed")
+    sub.add_parser("on")
+    sub.add_parser("off")
+    sub.add_parser("toggle")
+    sub.add_parser("is-on")
+    sub.add_parser("restore")
+    sub.add_parser("cycle-preset")
+    p = sub.add_parser("set-color")
+    p.add_argument("hex")
+    p.add_argument("--no-save", action="store_true",
+                   help="skip persisting to device memory (for slider drags)")
+    p = sub.add_parser("set-hue")
+    p.add_argument("hue", type=int)
+    p.add_argument("--no-save", action="store_true")
+    p = sub.add_parser("brightness")
+    p.add_argument("value")
+    p.add_argument("--no-save", action="store_true")
+    p = sub.add_parser("set-theme")
+    p.add_argument("hex")
+    p = sub.add_parser("follow-theme")
+    p.add_argument("mode", choices=["on", "off", "toggle"])
+    p = sub.add_parser("set-device",
+                       help="name substrings of the OpenRGB devices to control "
+                            "(several allowed); no names returns to auto-detection; "
+                            "--none manages no devices at all")
+    p.add_argument("names", nargs="*")
+    p.add_argument("--none", action="store_true", dest="none_selected")
+    p = sub.add_parser("setup")
+    p.add_argument("--with-theme-hook", action="store_true",
+                   help="also install the follow-theme hook")
+    args = parser.parse_args()
+
+    if args.cmd == "setup":
+        cmd_setup(args.with_theme_hook)
+        return
+
+    if args.cmd == "rescan":
+        # No rescan in the SDK protocol — a server restart is the re-enumeration.
+        subprocess.run(["systemctl", "--user", "restart", SERVER_UNIT], check=True)
+        deadline = time.monotonic() + 25
+        while time.monotonic() < deadline:
+            if server_reachable():
+                return
+            time.sleep(0.5)
+        sys.exit(1)
+
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(LOCK_FILE, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # serialise keybinding spam
+        state = load_state()
+
+        if args.cmd == "is-on":
+            save_state(state)
+            sys.exit(0 if state["on"] else 1)
+
+        if args.cmd == "status":
+            state_out = dict(state, server=server_reachable())
+            save_state(state)
+            print(json.dumps(state_out, indent=2))
+            return
+
+        if args.cmd == "list-devices":
+            save_state(state)
+            result = []
+            if openrgb_available():
+                client = connect()
+                if client is not None:
+                    try:
+                        managed = {d.name for d in find_devices(client, state)}
+                        for dev in client.devices:
+                            result.append({"name": dev.name,
+                                           "type": dev.type.name.replace("_", " ").title(),
+                                           "managed": dev.name in managed})
+                    finally:
+                        client.disconnect()
+            print(json.dumps(result))
+            return
+
+        if args.cmd == "on":
+            state["on"] = True
+        elif args.cmd == "off":
+            state["on"] = False
+        elif args.cmd == "toggle":
+            state["on"] = not state["on"]
+        elif args.cmd == "restore":
+            pass
+        elif args.cmd == "set-color":
+            set_colour(state, parse_hex(args.hex))
+            state["on"] = True
+        elif args.cmd == "set-hue":
+            hue = args.hue % 360
+            rgb = tuple(round(c * 255) for c in colorsys.hsv_to_rgb(hue / 360, 1, 1))
+            set_colour(state, rgb)
+            state["hue"] = hue
+            state["on"] = True
+        elif args.cmd == "cycle-preset":
+            state["preset_index"] = (state["preset_index"] + 1) % len(state["presets"])
+            set_colour(state, parse_hex(state["presets"][state["preset_index"]]))
+            state["on"] = True
+        elif args.cmd == "brightness":
+            value = args.value
+            if value.startswith(("+", "-")):
+                result = state["brightness"] + int(value)
+            else:
+                result = int(value)
+            state["brightness"] = max(0, min(100, result))
+        elif args.cmd == "set-theme":
+            if not state["follow_theme"]:
+                save_state(state)
+                return  # manual colour wins until follow-theme is re-enabled
+            set_colour(state, parse_hex(args.hex), follow_theme=True)
+        elif args.cmd == "follow-theme":
+            if args.mode == "toggle":
+                state["follow_theme"] = not state["follow_theme"]
+            else:
+                state["follow_theme"] = args.mode == "on"
+            if state["follow_theme"]:
+                # Snap to the current accent right away — without this the
+                # toggle changes nothing until the next theme switch.
+                accent = theme_accent()
+                if accent is not None:
+                    set_colour(state, accent, follow_theme=True)
+        elif args.cmd == "set-device":
+            state["devices"] = [] if args.none_selected else \
+                [n.strip() for n in args.names if n.strip()]
+            state["devices_none"] = bool(args.none_selected)
+
+        save_state(state)
+        if not apply_state(state, from_unit=args.cmd == "restore",
+                           save=not getattr(args, "no_save", False)):
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
