@@ -302,7 +302,14 @@ class StubHardwareTest(CliTestCase):
     def test_direct_fallback_when_no_static_mode(self):
         self.set_devices([{"name": "Stub Mouse", "modes": ["Direct"]}])
         self.run_cli("set-color", "#102030")
-        self.assertIn({"dev": "Stub Mouse", "set_mode": "Direct"}, self.calls())
+        calls = self.calls()
+        self.assertIn({"dev": "Stub Mouse", "set_mode": "Direct"}, calls)
+        self.assertIn({"dev": "Stub Mouse", "set_color": [16, 32, 48]}, calls)
+
+    def test_set_device_matches_case_insensitive_substring(self):
+        self.run_cli("set-device", "stub bo")
+        self.assertEqual(self.state()["devices"], ["stub bo"])
+        self.assertIn({"dev": "Stub Board", "set_mode": "Static"}, self.calls())
 
 
 if __name__ == "__main__":
