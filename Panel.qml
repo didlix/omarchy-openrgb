@@ -201,15 +201,59 @@ Panel {
 
         Repeater {
           model: rgb.devicesModel
-          Toggle {
+          Item {
+            id: deviceRow
             required property var modelData
+            // Roles only mean something for a managed device while
+            // follow-theme is on; otherwise the chip hides.
+            readonly property bool showRole: modelData.managed === true && rgb.followTheme
+            readonly property var roleOrder: ["primary", "secondary", "accent"]
             width: parent.width
-            label: String(modelData.name || "")
-            description: String(modelData.type || "")
-            checked: modelData.managed === true
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onClicked: rgb.setDeviceEnabled(String(modelData.name || ""), modelData.managed !== true)
+            implicitHeight: deviceToggle.implicitHeight
+
+            Toggle {
+              id: deviceToggle
+              anchors.left: parent.left
+              anchors.right: parent.right
+              label: String(deviceRow.modelData.name || "")
+              description: String(deviceRow.modelData.type || "")
+              checked: deviceRow.modelData.managed === true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: rgb.setDeviceEnabled(String(deviceRow.modelData.name || ""), deviceRow.modelData.managed !== true)
+            }
+
+            // Role chip: click to cycle which theme colour this device follows.
+            BorderSurface {
+              visible: deviceRow.showRole
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(56)
+              anchors.verticalCenter: parent.verticalCenter
+              width: roleText.implicitWidth + Style.space(14)
+              height: roleText.implicitHeight + Style.space(8)
+              radius: Style.cornerRadius
+              color: "transparent"
+              borderSpec: Border.flat(root.dim, 1)
+
+              Text {
+                id: roleText
+                anchors.centerIn: parent
+                text: String(deviceRow.modelData.role || "primary")
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  var current = deviceRow.roleOrder.indexOf(String(deviceRow.modelData.role || "primary"))
+                  var next = deviceRow.roleOrder[(current + 1) % deviceRow.roleOrder.length]
+                  rgb.setDeviceRole(String(deviceRow.modelData.name || ""), next)
+                }
+              }
+            }
           }
         }
 
