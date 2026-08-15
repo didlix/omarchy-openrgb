@@ -434,11 +434,13 @@ def theme_rgb_color():
 
 
 def theme_role_color(role):
-    """Colour for a device role. accent is always the raw theme accent;
-    secondary resolves its own key through the layers and falls back to the
-    primary chain; everything else is the primary chain."""
+    """Colour for a device role. accent resolves its own key through the
+    layers (themes and overrides can supply an LED-friendly accent) and
+    falls back to the theme's UI accent; secondary resolves its own key and
+    falls back to the primary chain; everything else is the primary chain."""
     if role == "accent":
-        return theme_accent()
+        rgb = resolve_theme_key("accent")
+        return rgb if rgb is not None else theme_accent()
     if role == "secondary":
         rgb = resolve_theme_key("secondary")
         if rgb is not None:
@@ -613,6 +615,10 @@ def main():
     p.add_argument("--secondary", action="store_true",
                    help="set (or unset) the secondary role's colour instead "
                         "of the primary")
+    p.add_argument("--accent", action="store_true",
+                   help="set (or unset) the accent role's colour instead of "
+                        "the primary (overrides the theme's UI accent for "
+                        "lighting)")
     p = sub.add_parser("follow-theme")
     p.add_argument("mode", choices=["on", "off", "toggle"])
     p = sub.add_parser("set-device",
@@ -697,7 +703,7 @@ def main():
             if not args.words and not args.unset:
                 for theme in sorted(overrides):
                     parts = []
-                    for key in ("primary", "secondary"):
+                    for key in ("primary", "secondary", "accent"):
                         rgb = rgb_of(overrides[theme], key)
                         if rgb is not None:
                             label = "" if key == "primary" else key + " "
@@ -719,12 +725,16 @@ def main():
             theme = theme or current
             if theme is None:
                 raise SystemExit("omarchy-rgb: no current theme and none given")
-            key = "secondary" if args.secondary else "primary"
+            if args.secondary and args.accent:
+                raise SystemExit("omarchy-rgb: --secondary and --accent are "
+                                 "mutually exclusive")
+            key = "secondary" if args.secondary else \
+                "accent" if args.accent else "primary"
             if args.unset:
-                if args.secondary:
+                if key != "primary":
                     entry = overrides.get(theme)
                     if isinstance(entry, dict):
-                        entry.pop("secondary", None)
+                        entry.pop(key, None)
                         if not entry:
                             overrides.pop(theme, None)
                 else:

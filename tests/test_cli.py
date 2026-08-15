@@ -245,6 +245,16 @@ class ThemeColorCommandTest(CliTestCase):
         self.run_cli("theme-color", "othertheme", "#AABBCC")
         self.assertEqual(self.state()["color"], before)
 
+    def test_accent_set_list_unset(self):
+        self.run_cli("theme-color", "#0000AA", "--accent")
+        self.assertIn("accent #0000AA", self.run_cli("theme-color").stdout)
+        self.run_cli("theme-color", "testtheme", "--unset", "--accent")
+        self.assertNotIn("accent", self.overrides())
+
+    def test_accent_and_secondary_flags_are_exclusive(self):
+        self.run_cli("theme-color", "#0000AA", "--accent", "--secondary",
+                     expect=1)
+
     def test_secondary_set_list_unset_preserves_primary(self):
         self.run_cli("theme-color", "#111111", "--secondary")
         self.run_cli("theme-color", "#222222")
@@ -395,6 +405,17 @@ class RoleAndZoneTest(StubHardwareTest):
 
     def test_bad_role_rejected(self):
         self.run_cli("device-role", "Stub Board", "sparkly", expect=1)
+
+    def test_rgb_accent_key_beats_ui_accent(self):
+        self.colors_file.write_text(
+            'accent = "#112233"\n\n[rgb]\n'
+            'primary = "#AA0000"\naccent = "#0000AA"\n')
+        self.run_cli("device-role", "Stub Board", "accent")
+        self.assertEqual(self.whole_device_colours()[-1], [0, 0, 170])
+
+    def test_accent_role_falls_back_to_ui_accent(self):
+        self.run_cli("device-role", "Stub Board", "accent")
+        self.assertEqual(self.whole_device_colours()[-1], [17, 34, 51])
 
     def test_zone_path_prefers_direct_and_skips_flash_save(self):
         self.set_devices([{"name": "Stub Board",
