@@ -126,13 +126,35 @@ Item {
     run(names.length > 0 ? ["set-device"].concat(names) : ["set-device", "--none"])
   }
 
-  // Assign a device's follow-theme colour role (primary/secondary/accent).
-  // Optimistic like everything else; the CLI relights if follow-theme is on.
+  // Assign a follow-theme colour role (primary/secondary/accent) to a
+  // device, or to one zone as "Device/Zone". Optimistic like everything
+  // else; the CLI relights if follow-theme is on. Zones with no explicit
+  // role carry null and display their device's role, so inheritance stays
+  // live without a refresh.
   function setDeviceRole(name, role) {
+    var devName = name
+    var zoneName = null
+    var slash = name.indexOf("/")
+    if (slash >= 0) {
+      devName = name.slice(0, slash)
+      zoneName = name.slice(slash + 1)
+    }
     var model = devicesModel.slice()
     for (var i = 0; i < model.length; i++) {
       var dev = Object.assign({}, model[i])
-      if (dev.name === name) dev.role = role
+      if (dev.name === devName) {
+        if (zoneName === null) {
+          dev.role = role
+        } else if (dev.zones instanceof Array) {
+          var zones = dev.zones.slice()
+          for (var j = 0; j < zones.length; j++) {
+            var zone = Object.assign({}, zones[j])
+            if (zone.name === zoneName) zone.role = role
+            zones[j] = zone
+          }
+          dev.zones = zones
+        }
+      }
       model[i] = dev
     }
     root.devicesModel = model

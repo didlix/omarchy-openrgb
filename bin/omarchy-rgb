@@ -169,7 +169,7 @@ def find_mode(dev, name):
     return None
 
 
-def apply_to_device(dev, state, colour, black):
+def apply_to_device(dev, state, colour, black, zone_colours=None):
     """Push state to one device, working with whatever modes it has.
 
     Static persists on-controller; Direct only holds while the SDK server has
@@ -188,6 +188,10 @@ def apply_to_device(dev, state, colour, black):
     mode = find_mode(dev, "Static") or find_mode(dev, "Direct")
     if mode is not None:
         dev.set_mode(mode)
+    if zone_colours:  # zone roles differ: colour each zone individually
+        for zone, zone_colour in zip(dev.zones, zone_colours):
+            zone.set_color(zone_colour)
+        return
     dev.set_color(colour)  # whole device: every zone alike
 
 
@@ -233,25 +237,38 @@ def apply_state(state, from_unit=False, save=True):
         black = RGBColor(0, 0, 0)
 
         # With follow-theme on, each device lights its assigned role's colour
-        # (primary — i.e. state["color"] — by default); a manual colour
-        # applies to every device alike.
+        # (primary — i.e. state["color"] — by default), and zones with their
+        # own assignment override their device; a manual colour applies to
+        # every device alike.
         role_colours = {}
 
-        def colour_for(dev):
-            if not state["follow_theme"] or not state.get("device_roles"):
-                return colour
-            role = role_of(dev.name, state)
+        def role_colour(role):
             if role not in role_colours:
                 rgb = theme_role_color(role)
                 role_colours[role] = colour if rgb is None else scaled(rgb)
             return role_colours[role]
+
+        def colours_for(dev):
+            """(whole-device colour, per-zone colour list or None)."""
+            if not state["follow_theme"] or not state.get("device_roles"):
+                return colour, None
+            device_role = role_of(dev.name, state)
+            try:
+                zone_names = [z.name for z in dev.zones]
+            except Exception:  # noqa: BLE001 — zone support varies by device
+                zone_names = []
+            zone_roles = [role_of(dev.name, state, z) for z in zone_names]
+            if all(r == device_role for r in zone_roles):
+                return role_colour(device_role), None
+            return role_colour(device_role), [role_colour(r) for r in zone_roles]
 
         # Per-device failures (a sleeping wireless mouse, say) must not stop
         # the rest; succeed if anything applied.
         applied = 0
         for dev in devices:
             try:
-                apply_to_device(dev, state, colour_for(dev), black)
+                device_colour, zone_colours = colours_for(dev)
+                apply_to_device(dev, state, device_colour, black, zone_colours)
                 applied += 1
                 if save:
                     # Persist to the device's onboard memory where supported, so
@@ -388,13 +405,39 @@ def theme_role_color(role):
     return theme_rgb_color()
 
 
-def role_of(name, state):
-    """Role for a device, matched like set-device: case-insensitive
-    substring, primary when nothing matches."""
+def role_entry(state, name, zone=None):
+    """Explicit role assignment for a device or one of its zones, or None.
+
+    Keys are case-insensitive substrings of the device name; a key with a
+    '/' matches '<device substring>/<zone substring>' and only ever applies
+    to zones.
+    """
     for key, role in (state.get("device_roles") or {}).items():
-        if str(key).lower() in name.lower():
-            return role if role in ROLES else "primary"
-    return "primary"
+        key = str(key)
+        if zone is not None:
+            if "/" not in key:
+                continue
+            device_part, zone_part = key.split("/", 1)
+            if device_part.lower() in name.lower() \
+                    and zone_part.lower() in zone.lower():
+                return role if role in ROLES else "primary"
+        else:
+            if "/" in key:
+                continue
+            if key.lower() in name.lower():
+                return role if role in ROLES else "primary"
+    return None
+
+
+def role_of(name, state, zone=None):
+    """Effective role: the zone's own assignment, else its device's, else
+    primary."""
+    if zone is not None:
+        role = role_entry(state, name, zone)
+        if role is not None:
+            return role
+    role = role_entry(state, name)
+    return role if role is not None else "primary"
 
 
 def save_overrides(overrides):
@@ -539,7 +582,8 @@ def main():
                             "no args lists assignments, '<device> "
                             "primary|secondary|accent' sets one (device "
                             "matched like set-device, by case-insensitive "
-                            "substring; primary is the default)")
+                            "substring; '<device>/<zone>' targets one zone; "
+                            "primary is the default)")
     p.add_argument("words", nargs="*", metavar="[device] [role]")
     p = sub.add_parser("setup")
     p.add_argument("--with-theme-hook", action="store_true",
@@ -584,10 +628,20 @@ def main():
                     try:
                         managed = {d.name for d in find_devices(client, state)}
                         for dev in client.devices:
+                            zones = []
+                            try:
+                                # Zone role is the explicit assignment or
+                                # null, so the UI can show inheritance live.
+                                for z in dev.zones:
+                                    zones.append({"name": z.name,
+                                                  "role": role_entry(state, dev.name, z.name)})
+                            except Exception:  # noqa: BLE001
+                                pass
                             result.append({"name": dev.name,
                                            "type": dev.type.name.replace("_", " ").title(),
                                            "managed": dev.name in managed,
-                                           "role": role_of(dev.name, state)})
+                                           "role": role_of(dev.name, state),
+                                           "zones": zones})
                     finally:
                         client.disconnect()
             print(json.dumps(result))
