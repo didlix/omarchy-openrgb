@@ -485,6 +485,13 @@ def main():
         if not apply_state(state, from_unit=args.cmd == "restore",
                            save=not getattr(args, "no_save", False)):
             sys.exit(1)
+        if args.cmd == "restore":
+            # A device's first write shortly after the server initialises it
+            # can be silently ignored (seen on a Corsair K65: clean API calls,
+            # no light). restore runs exactly then — boot and rescan — so
+            # apply twice with a settle gap.
+            time.sleep(1.5)
+            apply_state(state, from_unit=True, save=False)
 
 
 if __name__ == "__main__":
