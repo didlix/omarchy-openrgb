@@ -18,7 +18,14 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onOpenedChanged: if (opened) rgb.refreshDevices()
+  // Whether the popout is showing the DEVICE ROLES view instead of the
+  // main controls. Always reopens on the main view.
+  property bool rolesOpen: false
+
+  onOpenedChanged: if (opened) {
+    rolesOpen = false
+    rgb.refreshDevices()
+  }
 
   Service {
     id: rgb
@@ -61,6 +68,13 @@ Panel {
       Column {
         id: column
         width: panelFlick.width
+        spacing: Style.space(12)
+
+      // Main view — hidden while the DEVICE ROLES view is open.
+      Column {
+        id: mainView
+        visible: !root.rolesOpen
+        width: parent.width
         spacing: Style.space(12)
 
       Text {
@@ -183,6 +197,7 @@ Panel {
         }
 
         PanelActionButton {
+          id: rescanButton
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           iconText: "󰑐"
@@ -193,6 +208,17 @@ Panel {
           fontFamily: root.fontFamily
           onClicked: rgb.rescanDevices()
         }
+
+        PanelActionButton {
+          anchors.right: rescanButton.left
+          anchors.rightMargin: Style.space(6)
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: "󰒓"
+          tooltipText: "Device colour roles"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onClicked: root.rolesOpen = true
+        }
       }
 
       Column {
@@ -201,59 +227,15 @@ Panel {
 
         Repeater {
           model: rgb.devicesModel
-          Item {
-            id: deviceRow
+          Toggle {
             required property var modelData
-            // Roles only mean something for a managed device while
-            // follow-theme is on; otherwise the chip hides.
-            readonly property bool showRole: modelData.managed === true && rgb.followTheme
-            readonly property var roleOrder: ["primary", "secondary", "accent"]
             width: parent.width
-            implicitHeight: deviceToggle.implicitHeight
-
-            Toggle {
-              id: deviceToggle
-              anchors.left: parent.left
-              anchors.right: parent.right
-              label: String(deviceRow.modelData.name || "")
-              description: String(deviceRow.modelData.type || "")
-              checked: deviceRow.modelData.managed === true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: rgb.setDeviceEnabled(String(deviceRow.modelData.name || ""), deviceRow.modelData.managed !== true)
-            }
-
-            // Role chip: click to cycle which theme colour this device follows.
-            BorderSurface {
-              visible: deviceRow.showRole
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(56)
-              anchors.verticalCenter: parent.verticalCenter
-              width: roleText.implicitWidth + Style.space(14)
-              height: roleText.implicitHeight + Style.space(8)
-              radius: Style.cornerRadius
-              color: "transparent"
-              borderSpec: Border.flat(root.dim, 1)
-
-              Text {
-                id: roleText
-                anchors.centerIn: parent
-                text: String(deviceRow.modelData.role || "primary")
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  var current = deviceRow.roleOrder.indexOf(String(deviceRow.modelData.role || "primary"))
-                  var next = deviceRow.roleOrder[(current + 1) % deviceRow.roleOrder.length]
-                  rgb.setDeviceRole(String(deviceRow.modelData.name || ""), next)
-                }
-              }
-            }
+            label: String(modelData.name || "")
+            description: String(modelData.type || "")
+            checked: modelData.managed === true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: rgb.setDeviceEnabled(String(modelData.name || ""), modelData.managed !== true)
           }
         }
 
@@ -261,6 +243,101 @@ Panel {
           visible: rgb.devicesModel.length === 0
           width: parent.width
           text: "No devices found — is the OpenRGB server running?"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+      }
+      }
+
+      // DEVICE ROLES view — the cog's own page: per managed device, which
+      // theme colour it follows while follow-theme is on.
+      Column {
+        id: rolesView
+        visible: root.rolesOpen
+        width: parent.width
+        spacing: Style.space(12)
+
+        Item {
+          width: parent.width
+          implicitHeight: rolesHeader.implicitHeight
+
+          PanelSectionHeader {
+            id: rolesHeader
+            text: "DEVICE ROLES"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          PanelActionButton {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "󰁍"
+            tooltipText: "Back"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.rolesOpen = false
+          }
+        }
+
+        Text {
+          width: parent.width
+          text: "Which theme colour each device follows while Follow theme is on: the theme's primary colour, its secondary, or the raw accent."
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+
+        Text {
+          visible: !rgb.followTheme
+          width: parent.width
+          text: "Follow theme is off — roles take effect when it's re-enabled."
+          color: root.bar ? root.bar.urgent : Color.urgent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+
+        Repeater {
+          model: rgb.devicesModel
+          Column {
+            id: roleRow
+            required property var modelData
+            visible: modelData.managed === true
+            width: parent.width
+            spacing: Style.space(6)
+
+            Text {
+              width: parent.width
+              text: String(roleRow.modelData.name || "")
+              elide: Text.ElideRight
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+
+            ButtonGroup {
+              options: ["primary", "secondary", "accent"]
+              value: String(roleRow.modelData.role || "primary")
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              focusable: false
+              onChanged: function(value) {
+                rgb.setDeviceRole(String(roleRow.modelData.name || ""), value)
+              }
+            }
+          }
+        }
+
+        Text {
+          visible: !rgb.devicesModel.some(function(d) { return d.managed === true })
+          width: parent.width
+          text: "No managed devices — enable one under DEVICES first."
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
