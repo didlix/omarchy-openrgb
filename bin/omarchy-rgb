@@ -27,12 +27,21 @@ SCRIPT_PATH = os.path.realpath(__file__)
 STATE_DIR = os.path.expanduser("~/.local/state/omarchy-rgb")
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 LOCK_FILE = os.path.join(STATE_DIR, "lock")
-DATA_DIR = os.path.expanduser("~/.local/share/omarchy-case-rgb")
+LEGACY_DATA_DIR = os.path.expanduser("~/.local/share/omarchy-case-rgb")
+DATA_DIR = os.path.expanduser("~/.local/share/omarchy-openrgb")
 VENV_DIR = os.path.join(DATA_DIR, "venv")
 SERVER_UNIT = "openrgb-server.service"
 UNIT_PATH = os.path.expanduser("~/.config/systemd/user/" + SERVER_UNIT)
 BIN_LINK = os.path.expanduser("~/.local/bin/omarchy-rgb")
 HOOK_DIR = os.path.expanduser("~/.config/omarchy/hooks/theme-set.d")
+
+# Migrate the data dir from the plugin's pre-release name. os.rename is
+# atomic; a concurrent invocation racing us just loses quietly.
+if os.path.isdir(LEGACY_DATA_DIR) and not os.path.exists(DATA_DIR):
+    try:
+        os.rename(LEGACY_DATA_DIR, DATA_DIR)
+    except OSError:
+        pass
 
 # openrgb-python lives in the setup-managed venv; the CLI itself runs on the
 # system interpreter so `setup` works before any dependencies exist.

@@ -161,7 +161,7 @@ Add to `~/.config/omarchy/extensions/omarchy-menu.jsonc`:
 systemctl --user disable --now openrgb-server
 rm -f ~/.config/systemd/user/openrgb-server.service ~/.local/bin/omarchy-rgb \
       ~/.config/omarchy/hooks/theme-set.d/20-case-rgb
-rm -rf ~/.local/share/omarchy-case-rgb ~/.local/state/omarchy-rgb
+rm -rf ~/.local/share/omarchy-openrgb ~/.local/state/omarchy-rgb
 omarchy plugin remove didlix.case-rgb
 ```
 
