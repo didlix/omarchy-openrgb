@@ -66,6 +66,30 @@ Panel {
         width: panelFlick.width
         spacing: Style.space(12)
 
+      // Stale-hook callout: blockquote-style accent bar on the left, so it
+      // reads as a notice rather than another bordered control.
+      BorderSurface {
+        visible: rgb.themeHookStale
+        width: parent.width
+        implicitHeight: staleText.implicitHeight + Style.space(16)
+        color: Qt.alpha(Color.accent, 0.08)
+        borderSpec: Border.flat(Color.accent, "0 0 0 3")
+
+        Text {
+          id: staleText
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.leftMargin: Style.space(12)
+          anchors.rightMargin: Style.space(8)
+          text: "Theme hook update available — re-run `omarchy-rgb setup`."
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+      }
+
       Text {
         visible: rgb.needsSetup
         width: parent.width
@@ -176,16 +200,6 @@ Panel {
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: rgb.setFollowTheme(!rgb.followTheme)
-      }
-
-      Text {
-        visible: rgb.themeHookStale
-        width: parent.width
-        text: "Theme hook update available — re-run `omarchy-rgb setup`."
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        wrapMode: Text.WordWrap
       }
 
       Item {
