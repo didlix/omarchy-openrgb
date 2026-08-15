@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Full test suite: Python black-box CLI tests, then QML service tests
+# against the stubbed Quickshell modules (pattern borrowed from
+# basecamp/omarchy-basecamp-plugin).
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+python3 -m unittest discover -s "$root/tests"
+
+qml_test_runner="${QML_TEST_RUNNER:-}"
+if [[ -z $qml_test_runner ]]; then
+  if [[ -x /usr/lib/qt6/bin/qmltestrunner ]]; then
+    qml_test_runner=/usr/lib/qt6/bin/qmltestrunner
+  else
+    qml_test_runner="$(command -v qmltestrunner)"
+  fi
+fi
+
+QT_QPA_PLATFORM=offscreen \
+QT_QUICK_BACKEND=software \
+"$qml_test_runner" \
+  -input "$root/tests/qml" \
+  -import "$root/tests/qml/imports" \
+  -o -,txt
