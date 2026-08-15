@@ -396,6 +396,26 @@ class RoleAndZoneTest(StubHardwareTest):
     def test_bad_role_rejected(self):
         self.run_cli("device-role", "Stub Board", "sparkly", expect=1)
 
+    def test_zone_path_prefers_direct_and_skips_flash_save(self):
+        self.set_devices([{"name": "Stub Board",
+                           "modes": ["Static", "Off", "Direct"],
+                           "zones": ["Main", "Strip 1", "Strip 2"]}])
+        self.run_cli("device-role", "Stub Board/Strip 1", "secondary")
+        calls = self.calls()
+        self.assertIn({"dev": "Stub Board", "set_mode": "Direct"}, calls)
+        self.assertNotIn({"dev": "Stub Board", "save_mode": True}, calls)
+
+    def test_persist_placeholders_resolve_zone_colours(self):
+        log = self.home / "persist.log"
+        self.seed_state({"persist_commands": [[
+            "sh", "-c", 'printf "%s %s %s" "$1" "$2" "$3" > ' + str(log),
+            "sh", "{color:Stub Board/Strip 1}", "{color:Board/Main}",
+            "{color}"]]})
+        self.run_cli("set-theme")  # sync state colour to resolved primary
+        self.run_cli("device-role", "Stub Board/Strip 1", "secondary")
+        self.assertEqual(log.read_text().split(),
+                         ["#00AA00", "#AA0000", "#AA0000"])
+
     def test_manual_color_ignores_roles(self):
         self.run_cli("device-role", "Stub Board/Strip 1", "secondary")
         self.log.unlink()

@@ -18,6 +18,7 @@ import fcntl
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -179,24 +180,34 @@ def apply_to_device(dev, state, colour, black, zone_colours=None):
     Static persists on-controller; Direct only holds while the SDK server has
     the device open — fine, the server is a permanently-running user service.
     Devices without a native Off (e.g. SteelSeries mice) go black instead.
+
+    Returns True when the per-zone path was used — controllers must NOT
+    save_mode then, or they'd boot into an unlit Direct mode.
     """
     if not state["on"]:
         off = find_mode(dev, "Off")
         if off is not None:
             dev.set_mode(off)
-            return
+            return False
         dev.set_mode(find_mode(dev, "Static") or find_mode(dev, "Direct") or dev.modes[0])
         dev.set_color(black)
-        return
+        return False
+
+    if zone_colours:  # zone roles differ: colour each zone individually
+        # Static often ignores zone-level writes (ASUS Aura does) — Direct
+        # is the per-zone path, and the always-running server holds it.
+        mode = find_mode(dev, "Direct") or find_mode(dev, "Static")
+        if mode is not None:
+            dev.set_mode(mode)
+        for zone, zone_colour in zip(dev.zones, zone_colours):
+            zone.set_color(zone_colour)
+        return True
 
     mode = find_mode(dev, "Static") or find_mode(dev, "Direct")
     if mode is not None:
         dev.set_mode(mode)
-    if zone_colours:  # zone roles differ: colour each zone individually
-        for zone, zone_colour in zip(dev.zones, zone_colours):
-            zone.set_color(zone_colour)
-        return
     dev.set_color(colour)  # whole device: every zone alike
+    return False
 
 
 def apply_state(state, from_unit=False, save=True):
@@ -272,13 +283,15 @@ def apply_state(state, from_unit=False, save=True):
         for dev in devices:
             try:
                 device_colour, zone_colours = colours_for(dev)
-                apply_to_device(dev, state, device_colour, black, zone_colours)
+                zoned = apply_to_device(dev, state, device_colour, black,
+                                        zone_colours)
                 applied += 1
-                if save:
+                if save and not zoned:
                     # Persist to the device's onboard memory where supported, so
                     # wireless mice that micro-sleep wake up in the right colour
                     # instead of their firmware default. Slider drags skip this
-                    # to spare the flash.
+                    # to spare the flash; the zone path skips it so devices
+                    # don't save an unlit Direct mode as their boot state.
                     try:
                         dev.save_mode()
                     except Exception:  # noqa: BLE001 — many controllers can't save
@@ -290,12 +303,36 @@ def apply_state(state, from_unit=False, save=True):
         # (e.g. SteelSeries mice via rivalcfg — their firmware ignores
         # OpenRGB's SaveMode). persist_commands in state.json is a list of
         # argv templates run on save-worthy actions; {color} becomes the
-        # brightness-scaled hex (#000000 when off).
+        # brightness-scaled hex (#000000 when off), and
+        # {color:Device/Zone} the zone's role-resolved colour (substring
+        # matched), so persist tools don't clobber per-zone roles.
         if save and applied:
-            final = "#000000" if not state["on"] else \
-                "#{:02X}{:02X}{:02X}".format(colour.red, colour.green, colour.blue)
+            def final_hex(c):
+                return "#{:02X}{:02X}{:02X}".format(c.red, c.green, c.blue)
+
+            def token_colour(spec):
+                if not state["on"]:
+                    return "#000000"
+                dev_part, _, zone_part = spec.partition("/")
+                for dev in devices:
+                    if dev_part.lower() in dev.name.lower():
+                        if not state["follow_theme"] or not state.get("device_roles"):
+                            return final_hex(colour)
+                        try:
+                            zones = [z.name for z in dev.zones]
+                        except Exception:  # noqa: BLE001
+                            zones = []
+                        zone = next((z for z in zones
+                                     if zone_part.lower() in z.lower()), None)
+                        return final_hex(role_colour(role_of(dev.name, state, zone)))
+                return final_hex(colour)
+
+            final = "#000000" if not state["on"] else final_hex(colour)
             for template in state.get("persist_commands") or []:
-                cmd = [str(part).replace("{color}", final) for part in template]
+                cmd = [re.sub(r"\{color:([^}]*)\}",
+                              lambda m: token_colour(m.group(1)),
+                              str(part)).replace("{color}", final)
+                       for part in template]
                 result = subprocess.run(cmd, check=False, capture_output=True, text=True)
                 if result.returncode != 0:
                     print(f"omarchy-rgb: persist command failed: {' '.join(cmd)}: "
