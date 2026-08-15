@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "didlix.case-rgb",
   "name": "RGB Lighting",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "didlix",
   "license": "MIT",
   "description": "RGB lighting control via OpenRGB: per-device management, colour presets, hue and brightness, follow-theme.",
