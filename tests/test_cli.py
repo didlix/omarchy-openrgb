@@ -33,12 +33,23 @@ class _Mode:
         self.name = name
 
 
+class _Zone:
+    def __init__(self, name, device):
+        self.name = name
+        self._device = device
+
+    def set_color(self, color):
+        self._device._record({"dev": self._device.name, "zone": self.name,
+                              "set_color": [color.red, color.green, color.blue]})
+
+
 class _Device:
     def __init__(self, spec, log):
         from openrgb.utils import DeviceType
         self.name = spec["name"]
         self.type = DeviceType.MOTHERBOARD
         self.modes = [_Mode(m) for m in spec["modes"]]
+        self.zones = [_Zone(z, self) for z in spec.get("zones", [])]
         self._log = log
 
     def _record(self, event):
@@ -234,6 +245,16 @@ class ThemeColorCommandTest(CliTestCase):
         self.run_cli("theme-color", "othertheme", "#AABBCC")
         self.assertEqual(self.state()["color"], before)
 
+    def test_secondary_set_list_unset_preserves_primary(self):
+        self.run_cli("theme-color", "#111111", "--secondary")
+        self.run_cli("theme-color", "#222222")
+        out = self.run_cli("theme-color").stdout
+        self.assertIn("#222222", out)
+        self.assertIn("secondary #111111", out)
+        self.run_cli("theme-color", "testtheme", "--unset", "--secondary")
+        self.assertIn('primary = "#222222"', self.overrides())
+        self.assertNotIn("secondary", self.overrides())
+
 
 class StubHardwareTest(CliTestCase):
     """Device-level behaviour through a fake openrgb package.
@@ -310,6 +331,77 @@ class StubHardwareTest(CliTestCase):
         self.run_cli("set-device", "stub bo")
         self.assertEqual(self.state()["devices"], ["stub bo"])
         self.assertIn({"dev": "Stub Board", "set_mode": "Static"}, self.calls())
+
+
+class RoleAndZoneTest(StubHardwareTest):
+    """Roles resolve per device and per zone against stub hardware.
+
+    The theme defines distinct primary (#AA0000) and secondary (#00AA00)
+    via its [rgb] table; accent stays #112233 from the base fixture.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Same modes as the parent fixture so its inherited tests still
+        # hold; only the zones are new.
+        self.set_devices([{"name": "Stub Board", "modes": ["Static", "Off"],
+                           "zones": ["Main", "Strip 1", "Strip 2"]}])
+        self.colors_file.write_text(
+            'accent = "#112233"\n\n[rgb]\n'
+            'primary = "#AA0000"\nsecondary = "#00AA00"\n')
+
+    def zone_colours(self):
+        return {c["zone"]: c["set_color"] for c in self.calls() if "zone" in c}
+
+    def whole_device_colours(self):
+        return [c["set_color"] for c in self.calls()
+                if "zone" not in c and "set_color" in c]
+
+    def test_zone_override_colours_zones_individually(self):
+        self.run_cli("device-role", "Stub Board/Strip 1", "secondary")
+        colours = self.zone_colours()
+        self.assertEqual(colours["Strip 1"], [0, 170, 0])
+        self.assertEqual(colours["Main"], [170, 0, 0])
+        self.assertEqual(colours["Strip 2"], [170, 0, 0])
+        self.assertEqual(self.whole_device_colours(), [])
+
+    def test_uniform_roles_take_whole_device_path(self):
+        self.run_cli("device-role", "Stub Board", "secondary")
+        self.assertEqual(self.zone_colours(), {})
+        self.assertEqual(self.whole_device_colours()[-1], [0, 170, 0])
+
+    def test_secondary_falls_back_to_primary_chain(self):
+        self.colors_file.write_text(
+            'accent = "#112233"\n\n[rgb]\nprimary = "#AA0000"\n')
+        self.run_cli("device-role", "Stub Board/Strip 1", "secondary")
+        self.assertEqual(self.zone_colours()["Strip 1"], [170, 0, 0])
+
+    def test_override_secondary_beats_theme_table(self):
+        self.run_cli("theme-color", "#0000AA", "--secondary")
+        self.log.unlink()
+        self.run_cli("device-role", "Stub Board/Strip 1", "secondary")
+        self.assertEqual(self.zone_colours()["Strip 1"], [0, 0, 170])
+
+    def test_role_listing_and_zone_reporting(self):
+        self.run_cli("device-role", "Stub Board/Strip 1", "secondary")
+        self.run_cli("device-role", "Stub Board", "accent")
+        out = self.run_cli("device-role").stdout
+        self.assertIn("Stub Board: accent", out)
+        self.assertIn("Stub Board/Strip 1: secondary", out)
+        board = json.loads(self.run_cli("list-devices").stdout)[0]
+        self.assertEqual(board["role"], "accent")
+        self.assertEqual({z["name"]: z["role"] for z in board["zones"]},
+                         {"Main": None, "Strip 1": "secondary", "Strip 2": None})
+
+    def test_bad_role_rejected(self):
+        self.run_cli("device-role", "Stub Board", "sparkly", expect=1)
+
+    def test_manual_color_ignores_roles(self):
+        self.run_cli("device-role", "Stub Board/Strip 1", "secondary")
+        self.log.unlink()
+        self.run_cli("set-color", "#123456")  # drops follow_theme
+        self.assertEqual(self.zone_colours(), {})
+        self.assertEqual(self.whole_device_colours()[-1], [18, 52, 86])
 
 
 if __name__ == "__main__":

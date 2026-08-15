@@ -148,4 +148,21 @@ TestCase {
     compare(service.followTheme, true)
     compareArgs(lastStart(), ["follow-theme", "on"])
   }
+
+  function test_device_role_command_and_model() {
+    service.devicesModel = [{name: "Board", managed: true, role: "primary", zones: []}]
+    service.setDeviceRole("Board", "accent")
+    compareArgs(lastStart(), ["device-role", "Board", "accent"])
+    compare(service.devicesModel[0].role, "accent")
+  }
+
+  function test_zone_role_command_updates_zone_only() {
+    service.devicesModel = [{name: "Board", managed: true, role: "primary",
+      zones: [{name: "Strip 1", role: null}, {name: "Strip 2", role: null}]}]
+    service.setDeviceRole("Board/Strip 1", "secondary")
+    compareArgs(lastStart(), ["device-role", "Board/Strip 1", "secondary"])
+    compare(service.devicesModel[0].zones[0].role, "secondary")
+    verify(service.devicesModel[0].zones[1].role === null)
+    compare(service.devicesModel[0].role, "primary")
+  }
 }
