@@ -18,7 +18,12 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  // Whether the popout is showing the DEVICE ROLES view instead of the
+  // main controls. Always reopens on the main view.
+  property bool rolesOpen: false
+
   onOpenedChanged: if (opened) {
+    rolesOpen = false
     rgb.refreshDevices()
     rgb.checkThemeHook()
   }
@@ -67,7 +72,8 @@ Panel {
         spacing: Style.space(12)
 
       // Stale-hook callout: blockquote-style accent bar on the left, so it
-      // reads as a notice rather than another bordered control.
+      // reads as a notice rather than another bordered control. Sits above
+      // the view switch so it shows in both views.
       BorderSurface {
         visible: rgb.themeHookStale
         width: parent.width
@@ -89,6 +95,13 @@ Panel {
           wrapMode: Text.WordWrap
         }
       }
+
+      // Main view — hidden while the DEVICE ROLES view is open.
+      Column {
+        id: mainView
+        visible: !root.rolesOpen
+        width: parent.width
+        spacing: Style.space(12)
 
       Text {
         visible: rgb.needsSetup
@@ -214,6 +227,7 @@ Panel {
         }
 
         PanelActionButton {
+          id: rescanButton
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           iconText: "󰑐"
@@ -223,6 +237,17 @@ Panel {
           foreground: root.foreground
           fontFamily: root.fontFamily
           onClicked: rgb.rescanDevices()
+        }
+
+        PanelActionButton {
+          anchors.right: rescanButton.left
+          anchors.rightMargin: Style.space(6)
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: "󰒓"
+          tooltipText: "Device colour roles"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onClicked: root.rolesOpen = true
         }
       }
 
@@ -248,6 +273,138 @@ Panel {
           visible: rgb.devicesModel.length === 0
           width: parent.width
           text: "No devices found — is the OpenRGB server running?"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+      }
+      }
+
+      // DEVICE ROLES view — the cog's own page: per managed device, which
+      // theme colour it follows while follow-theme is on.
+      Column {
+        id: rolesView
+        visible: root.rolesOpen
+        width: parent.width
+        spacing: Style.space(12)
+
+        Item {
+          width: parent.width
+          implicitHeight: rolesHeader.implicitHeight
+
+          PanelSectionHeader {
+            id: rolesHeader
+            text: "DEVICE ROLES"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          PanelActionButton {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "󰁍"
+            tooltipText: "Back"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.rolesOpen = false
+          }
+        }
+
+        Text {
+          width: parent.width
+          text: "Which theme colour each device follows while Follow theme is on: the theme's primary colour, its secondary, or the raw accent."
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+
+        Text {
+          visible: !rgb.followTheme
+          width: parent.width
+          text: "Follow theme is off — roles take effect when it's re-enabled."
+          color: root.bar ? root.bar.urgent : Color.urgent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+
+        Repeater {
+          model: rgb.devicesModel
+          Column {
+            id: roleRow
+            required property var modelData
+            readonly property bool multiZone: (modelData.zones instanceof Array) && modelData.zones.length > 1
+            visible: modelData.managed === true
+            width: parent.width
+            spacing: Style.space(6)
+
+            Text {
+              width: parent.width
+              text: String(roleRow.modelData.name || "")
+              elide: Text.ElideRight
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+
+            ButtonGroup {
+              options: ["primary", "secondary", "accent"]
+              value: String(roleRow.modelData.role || "primary")
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              focusable: false
+              onChanged: function(value) {
+                rgb.setDeviceRole(String(roleRow.modelData.name || ""), value)
+              }
+            }
+
+            // Zones inherit the device role until given their own; shown
+            // indented, only when the device actually has several zones.
+            Repeater {
+              model: roleRow.multiZone ? roleRow.modelData.zones : []
+              Column {
+                id: zoneRow
+                required property var modelData
+                width: parent.width
+                spacing: Style.space(4)
+
+                Text {
+                  width: parent.width
+                  leftPadding: Style.space(14)
+                  text: String(zoneRow.modelData.name || "")
+                  elide: Text.ElideRight
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                ButtonGroup {
+                  x: Style.space(14)
+                  options: ["primary", "secondary", "accent"]
+                  value: String(zoneRow.modelData.role || roleRow.modelData.role || "primary")
+                  foreground: root.foreground
+                  accent: Color.accent
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  focusable: false
+                  onChanged: function(value) {
+                    rgb.setDeviceRole(String(roleRow.modelData.name || "") + "/" + String(zoneRow.modelData.name || ""), value)
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        Text {
+          visible: !rgb.devicesModel.some(function(d) { return d.managed === true })
+          width: parent.width
+          text: "No managed devices — enable one under DEVICES first."
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall

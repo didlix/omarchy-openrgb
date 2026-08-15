@@ -122,6 +122,35 @@ wins:
 A change made with `theme-color` relights the case immediately when it
 affects the active theme.
 
+### Device roles
+
+With several managed devices, each can follow a different slot of the theme
+while follow-theme is on: **primary** (the default — the resolved colour
+above), **secondary** (the `secondary` key in your themes.toml or a theme's
+`[rgb]` table, falling back to primary), or **accent** (the raw theme
+accent). A manually picked colour still applies to every device alike.
+
+Assign roles from the popout — managed device rows grow a role chip while
+follow-theme is on; click it to cycle — or from the CLI (devices matched
+like `set-device`, by case-insensitive substring):
+
+```bash
+omarchy-rgb device-role "Aerox" secondary
+omarchy-rgb device-role                          # list assignments
+omarchy-rgb theme-color rose-pine '#56949F' --secondary
+```
+
+Zones can override their device. A controller often carries several zones —
+an ASUS board exposes its own LED plus the addressable headers your case
+strips are on — and each can take its own role, inheriting the device's
+until assigned. In the popout, multi-zone devices list their zones under the
+device; from the CLI, target one as `<device>/<zone>` (both halves substring
+matched):
+
+```bash
+omarchy-rgb device-role "STRIX/Addressable 1" secondary
+```
+
 ### Persisting colour to stubborn firmware
 
 Where supported, discrete actions also save the mode to the device's onboard
