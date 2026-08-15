@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 
 SCRIPT_PATH = os.path.realpath(__file__)
 STATE_DIR = os.path.expanduser("~/.local/state/omarchy-rgb")
@@ -34,6 +35,18 @@ SERVER_UNIT = "openrgb-server.service"
 UNIT_PATH = os.path.expanduser("~/.config/systemd/user/" + SERVER_UNIT)
 BIN_LINK = os.path.expanduser("~/.local/bin/omarchy-rgb")
 HOOK_DIR = os.path.expanduser("~/.config/omarchy/hooks/theme-set.d")
+THEME_COLORS_FILE = os.path.expanduser(
+    "~/.local/state/omarchy/current/theme/colors.toml")
+THEME_NAME_FILE = os.path.expanduser("~/.local/state/omarchy/current/theme.name")
+OVERRIDES_FILE = os.path.expanduser("~/.config/omarchy-rgb/themes.toml")
+
+# Themes whose accent is not the colour the theme is known by. Lowest-priority
+# layer before the accent fallback — a theme's own [rgb] table or the user's
+# themes.toml always wins (see theme_rgb_color). Additions welcome.
+CURATED = {
+    "rose-pine": "#D7827E",  # the rose — the accent is the pine teal
+    "kanagawa": "#7E9CD8",   # the wave blue — the accent is the paper beige
+}
 
 # Migrate the data dir from the plugin's pre-release name. os.rename is
 # atomic; a concurrent invocation racing us just loses quietly.
@@ -269,9 +282,8 @@ def set_colour(state, rgb, follow_theme=False):
 
 def theme_accent():
     """Current Omarchy theme accent as an RGB tuple, or None."""
-    path = os.path.expanduser("~/.local/state/omarchy/current/theme/colors.toml")
     try:
-        with open(path) as f:
+        with open(THEME_COLORS_FILE) as f:
             for line in f:
                 if line.startswith("accent"):
                     value = line.split("=", 1)[1].strip().strip('"').lstrip("#")
@@ -279,6 +291,75 @@ def theme_accent():
     except (OSError, SystemExit):
         pass
     return None
+
+
+def toml_load(path):
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def theme_name():
+    """Current Omarchy theme slug, or None."""
+    try:
+        with open(THEME_NAME_FILE) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def rgb_of(value):
+    """A colour entry as an RGB tuple: '#RRGGBB' or {primary = '#RRGGBB'}."""
+    if isinstance(value, dict):
+        value = value.get("primary")
+    if not isinstance(value, str):
+        return None
+    try:
+        return parse_hex(value)
+    except SystemExit:
+        return None
+
+
+def theme_rgb_color():
+    """The colour the current theme should light the case with.
+
+    Resolution order: the user's themes.toml override, the theme's own [rgb]
+    table, the curated defaults, then the theme accent. Every layer is
+    optional, so a theme with none of them still follows its accent.
+    """
+    name = theme_name()
+    if name:
+        rgb = rgb_of(toml_load(OVERRIDES_FILE).get(name))
+        if rgb is not None:
+            return rgb
+    rgb = rgb_of(toml_load(THEME_COLORS_FILE).get("rgb"))
+    if rgb is not None:
+        return rgb
+    if name:
+        rgb = rgb_of(CURATED.get(name))
+        if rgb is not None:
+            return rgb
+    return theme_accent()
+
+
+def save_overrides(overrides):
+    os.makedirs(os.path.dirname(OVERRIDES_FILE), exist_ok=True)
+    lines = ["# Per-theme RGB colour overrides for omarchy-rgb.",
+             "# One [theme-slug] table per theme:  primary = \"#RRGGBB\"", ""]
+    for theme in sorted(overrides):
+        entry = overrides[theme]
+        if not isinstance(entry, dict):
+            entry = {"primary": entry}
+        lines.append(f"[{theme}]")
+        for key, value in entry.items():
+            lines.append(f'{key} = "{value}"')
+        lines.append("")
+    tmp = OVERRIDES_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines))
+    os.replace(tmp, OVERRIDES_FILE)
 
 
 def confirm(prompt):
@@ -381,7 +462,14 @@ def main():
     p.add_argument("value")
     p.add_argument("--no-save", action="store_true")
     p = sub.add_parser("set-theme")
-    p.add_argument("hex")
+    p.add_argument("hex", nargs="?", default=None,
+                   help="accent fallback, used only when nothing else resolves")
+    p = sub.add_parser("theme-color",
+                       help="per-theme colour override: no args lists them, "
+                            "'#RRGGBB' sets the current theme's, "
+                            "'<theme> #RRGGBB' another's; --unset removes")
+    p.add_argument("words", nargs="*", metavar="[theme] [hex]")
+    p.add_argument("--unset", action="store_true")
     p = sub.add_parser("follow-theme")
     p.add_argument("mode", choices=["on", "off", "toggle"])
     p = sub.add_parser("set-device",
@@ -441,6 +529,52 @@ def main():
             print(json.dumps(result))
             return
 
+        if args.cmd == "theme-color":
+            overrides = toml_load(OVERRIDES_FILE)
+            current = theme_name()
+            if not args.words and not args.unset:
+                for theme in sorted(overrides):
+                    rgb = rgb_of(overrides[theme])
+                    print(f"{theme}: " + ("#{:02X}{:02X}{:02X}".format(*rgb)
+                                          if rgb else "(invalid)"))
+                resolved = theme_rgb_color()
+                if current:
+                    print(f"{current} (current) resolves to " +
+                          ("#{:02X}{:02X}{:02X}".format(*resolved)
+                           if resolved else "nothing — accent unavailable"))
+                save_state(state)
+                return
+            theme, hex_arg = None, None
+            for word in args.words:
+                if rgb_of(word) is not None:
+                    hex_arg = word
+                else:
+                    theme = word
+            theme = theme or current
+            if theme is None:
+                raise SystemExit("omarchy-rgb: no current theme and none given")
+            if args.unset:
+                overrides.pop(theme, None)
+            elif hex_arg is None:
+                raise SystemExit("omarchy-rgb: expected a #RRGGBB colour")
+            else:
+                entry = overrides.get(theme)
+                entry = dict(entry) if isinstance(entry, dict) else {}
+                entry["primary"] = "#{:02X}{:02X}{:02X}".format(*parse_hex(hex_arg))
+                overrides[theme] = entry
+            save_overrides(overrides)
+            # Relight immediately when the change affects the active theme.
+            if state["follow_theme"] and theme == current:
+                rgb = theme_rgb_color()
+                if rgb is not None:
+                    set_colour(state, rgb, follow_theme=True)
+                save_state(state)
+                if not apply_state(state):
+                    sys.exit(1)
+            else:
+                save_state(state)
+            return
+
         if args.cmd == "on":
             state["on"] = True
         elif args.cmd == "off":
@@ -473,18 +607,24 @@ def main():
             if not state["follow_theme"]:
                 save_state(state)
                 return  # manual colour wins until follow-theme is re-enabled
-            set_colour(state, parse_hex(args.hex), follow_theme=True)
+            rgb = theme_rgb_color()
+            if rgb is None and args.hex:
+                rgb = parse_hex(args.hex)  # older installed hooks pass the accent
+            if rgb is None:
+                save_state(state)
+                return  # no theme information at all — nothing to track
+            set_colour(state, rgb, follow_theme=True)
         elif args.cmd == "follow-theme":
             if args.mode == "toggle":
                 state["follow_theme"] = not state["follow_theme"]
             else:
                 state["follow_theme"] = args.mode == "on"
             if state["follow_theme"]:
-                # Snap to the current accent right away — without this the
+                # Snap to the current theme right away — without this the
                 # toggle changes nothing until the next theme switch.
-                accent = theme_accent()
-                if accent is not None:
-                    set_colour(state, accent, follow_theme=True)
+                rgb = theme_rgb_color()
+                if rgb is not None:
+                    set_colour(state, rgb, follow_theme=True)
         elif args.cmd == "set-device":
             state["devices"] = [] if args.none_selected else \
                 [n.strip() for n in args.names if n.strip()]

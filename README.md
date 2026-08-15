@@ -57,7 +57,7 @@ omarchy plugin add https://github.com/didlix/omarchy-openrgb.git --enable
   all (`omarchy-rgb set-device --none` from the CLI).
 - CLI: `omarchy-rgb status | jq .` — plus `on`, `off`, `toggle`,
   `set-color '#RRGGBB'`, `set-hue 0-359`, `brightness 0-100|+N|-N`,
-  `cycle-preset`, `follow-theme on|off|toggle`.
+  `cycle-preset`, `follow-theme on|off|toggle`, `theme-color`.
 
 Presets are user-editable: edit the `presets` array in
 `~/.local/state/omarchy-rgb/state.json`.
@@ -84,6 +84,43 @@ fall back to Direct, which holds for as long as the SDK server runs — that
 is what the systemd unit is for. A device that fails to apply (a sleeping
 wireless mouse, say) is skipped with a warning rather than blocking the
 rest. Note that lighting a wireless mouse costs battery.
+
+### Per-theme colours
+
+With follow-theme on, the lighting colour is resolved per theme, first match
+wins:
+
+1. **Your override** — `~/.config/omarchy-rgb/themes.toml`, easiest set via
+   the CLI:
+
+   ```bash
+   omarchy-rgb theme-color '#d7827e'            # for the current theme
+   omarchy-rgb theme-color rose-pine '#d7827e'  # for any theme by slug
+   omarchy-rgb theme-color rose-pine --unset
+   omarchy-rgb theme-color                      # list overrides
+   ```
+
+2. **The theme's own `[rgb]` table** — theme authors (or a
+   [theme overlay](https://learn.omacom.io/) in
+   `~/.config/omarchy/themes/<slug>/`) can declare the colour the theme wants
+   RGB hardware lit with, right in `colors.toml`:
+
+   ```toml
+   [rgb]
+   primary = "#d7827e"
+   ```
+
+   Unknown tables are ignored by every other Omarchy component, so this is
+   safe to add to any theme.
+
+3. **Curated defaults** — a small built-in table for stock themes whose
+   accent is not the colour the theme is known by (Rose Pine's accent is the
+   pine teal, not the rose). PRs welcome.
+
+4. **The theme accent** — the fallback that always exists.
+
+A change made with `theme-color` relights the case immediately when it
+affects the active theme.
 
 ### Persisting colour to stubborn firmware
 
