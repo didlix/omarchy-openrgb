@@ -5,6 +5,8 @@ the current colour, and a popout with on/off, preset swatches, a hue slider,
 a brightness slider, and a follow-theme toggle that keeps your lighting matched
 to your Omarchy theme accent.
 
+![The RGB Lighting popout in the Omarchy bar](docs/screenshot.png)
+
 Works with any RGB controller [OpenRGB](https://openrgb.org) supports —
 motherboard ARGB headers, case controllers, and the rest.
 
