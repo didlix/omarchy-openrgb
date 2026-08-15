@@ -31,6 +31,15 @@ Item {
   // hardware, which almost always means `omarchy-rgb setup` hasn't run.
   property bool needsSetup: false
 
+  // Whether the theme-set hook is installed — without it the follow-theme
+  // toggle can't actually track anything, so the panel greys it out.
+  // Re-checked every time the popout opens, so installing the hook is
+  // picked up without a shell restart.
+  property bool themeHookInstalled: true
+  function checkThemeHook() {
+    if (!hookProc.running) hookProc.running = true
+  }
+
   property var pendingCommand: null
 
   function loadState(payload) {
@@ -127,6 +136,12 @@ Item {
   }
 
   Process {
+    id: hookProc
+    command: ["test", "-x", root.home + "/.config/omarchy/hooks/theme-set.d/20-case-rgb"]
+    onExited: function(exitCode) { root.themeHookInstalled = exitCode === 0 }
+  }
+
+  Process {
     id: rescanProc
     command: [root.cli, "rescan"]
     onExited: {
@@ -174,5 +189,8 @@ Item {
 
   // Seed the state file on first ever run so the watch has something to load
   // (status always exits 0 and writes the file).
-  Component.onCompleted: if (!stateLoaded) run(["status"])
+  Component.onCompleted: {
+    checkThemeHook()
+    if (!stateLoaded) run(["status"])
+  }
 }

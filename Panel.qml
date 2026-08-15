@@ -18,7 +18,10 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onOpenedChanged: if (opened) rgb.refreshDevices()
+  onOpenedChanged: if (opened) {
+    rgb.refreshDevices()
+    rgb.checkThemeHook()
+  }
 
   Service {
     id: rgb
@@ -164,7 +167,11 @@ Panel {
       Toggle {
         width: parent.width
         label: "Follow theme"
-        description: "Colour tracks the theme accent"
+        description: rgb.themeHookInstalled
+          ? "Colour tracks the theme accent"
+          : "Theme hook not installed — run `omarchy-rgb setup --with-theme-hook`"
+        enabled: rgb.themeHookInstalled
+        opacity: rgb.themeHookInstalled ? 1.0 : 0.4
         checked: rgb.followTheme
         foreground: root.foreground
         fontFamily: root.fontFamily
